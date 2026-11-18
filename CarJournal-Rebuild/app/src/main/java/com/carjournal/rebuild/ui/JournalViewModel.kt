@@ -17,14 +17,14 @@ class JournalViewModel(application: Application) : AndroidViewModel(application)
     val vehicles = repo.dao.observeVehicles().stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
     val totals = repo.dao.observeTotals().stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), JournalTotals(0, 0, 0, 0.0, 0.0))
 
-    suspend fun addVehicle(vehicle: VehicleEntity, cover: Uri?, repair: RepairDraft?, photos: List<Uri>) =
-        repo.createVehicle(vehicle, cover, repair, photos)
+    suspend fun addVehicle(vehicle: VehicleEntity, repair: RepairDraft?, photos: List<Uri>) =
+        repo.createVehicle(vehicle, repair, photos)
 
-    suspend fun editVehicle(vehicle: VehicleEntity, cover: Uri?, removeCover: Boolean) =
-        repo.updateVehicle(vehicle, cover, removeCover)
+    suspend fun editVehicle(vehicle: VehicleEntity, keepPhotoIds: Set<Long>, newPhotos: List<Uri>) =
+        repo.updateVehicle(vehicle, keepPhotoIds, newPhotos)
 
-    suspend fun saveRepair(repair: RepairEntity, keepIds: Set<Long>, newPhotos: List<Uri>) =
-        repo.saveRepair(repair, keepIds, newPhotos)
+    suspend fun saveRepair(repair: RepairEntity, newVehiclePhotos: List<Uri>) =
+        repo.saveRepair(repair, newVehiclePhotos)
 
     suspend fun deleteVehicle(id: Long) = repo.deleteVehicle(id)
     suspend fun deleteRepair(id: Long) = repo.deleteRepair(id)

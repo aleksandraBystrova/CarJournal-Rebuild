@@ -47,6 +47,9 @@ private fun money(value: Double): String = NumberFormat.getNumberInstance(ru).ap
     minimumFractionDigits = 0
     maximumFractionDigits = 2
 }.format(value)
+private fun priceForInput(value: Double): String =
+    if (value.isFinite() && value == value.toLong().toDouble()) value.toLong().toString()
+    else java.math.BigDecimal.valueOf(value).stripTrailingZeros().toPlainString()
 
 private sealed interface Page {
     data object ListPage : Page
@@ -115,8 +118,7 @@ private fun VehicleListScreen(vm: JournalViewModel, onOpen: (Long) -> Unit, onCr
     val totals by vm.totals.collectAsState()
     var query by remember { mutableStateOf("") }
     val filtered = remember(vehicles, query) {
-        vehicles.filter { it.plateNumber.contains(query, ignoreCase = true) ||
-            it.model.contains(query, ignoreCase = true) || it.brand.contains(query, ignoreCase = true) }
+        vehicles.filter { it.plateNumber.contains(query, ignoreCase = true) }
     }
     Scaffold(
         topBar = { Header("Машины") },
@@ -132,18 +134,34 @@ private fun VehicleListScreen(vm: JournalViewModel, onOpen: (Long) -> Unit, onCr
             item {
                 OutlinedTextField(
                     value = query, onValueChange = { query = it },
-                    label = { Text("Поиск: номер, модель") },
+                    label = { Text("Поиск по госномеру") },
                     leadingIcon = { Icon(Icons.Outlined.Search, null) },
                     singleLine = true, modifier = Modifier.fillMaxWidth()
                 )
             }
             item {
                 SoftCard {
-                    Text("Всего машин: ${totals.totalVehicles}", fontWeight = FontWeight.Medium)
-                    Text("Машин с ремонтом: ${totals.repairedVehicles}")
-                    Text("Ремонтов: ${totals.repairsCount}")
-                    Text("Общая стоимость: ${money(totals.totalSom)} сом")
-                    Text("В рублях: ${money(totals.totalRub)} ₽")
+                    Text("Всего ремонтов: ${totals.repairsCount}",
+                        style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+                    Spacer(Modifier.height(10.dp))
+                    Text("Общая сумма", style = MaterialTheme.typography.bodyMedium)
+                    Spacer(Modifier.height(8.dp))
+                    Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                        Card(modifier = Modifier.weight(1f),
+                            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {
+                            Column(Modifier.padding(12.dp)) {
+                                Text("Сомы", style = MaterialTheme.typography.labelMedium)
+                                Text("${money(totals.totalSom)} сом", fontWeight = FontWeight.Bold)
+                            }
+                        }
+                        Card(modifier = Modifier.weight(1f),
+                            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {
+                            Column(Modifier.padding(12.dp)) {
+                                Text("Рубли", style = MaterialTheme.typography.labelMedium)
+                                Text("${money(totals.totalRub)} ₽", fontWeight = FontWeight.Bold)
+                            }
+                        }
+                    }
                 }
             }
             if (filtered.isEmpty()) {
@@ -162,14 +180,9 @@ private fun VehicleListScreen(vm: JournalViewModel, onOpen: (Long) -> Unit, onCr
                         CarPicture(vehicle.photoPath, Modifier.size(74.dp))
                         Spacer(Modifier.width(14.dp))
                         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
-                            Text(vehicle.plateNumber.ifBlank { vehicle.model }, fontWeight = FontWeight.Bold,
+                            Text(vehicle.plateNumber, fontWeight = FontWeight.Bold,
                                 style = MaterialTheme.typography.titleMedium)
-                            Text(listOf(vehicle.brand, vehicle.model).filter { it.isNotBlank() }.joinToString(" "))
                             Text("Ремонтов: ${vehicle.repairCount}", style = MaterialTheme.typography.bodySmall)
-                            if (vehicle.repairCount > 0) {
-                                Text("${money(vehicle.totalSom)} сом · ${money(vehicle.totalRub)} ₽",
-                                    style = MaterialTheme.typography.bodySmall)
-                            }
                         }
                         Icon(Icons.Outlined.ChevronRight, null)
                     }
@@ -204,7 +217,7 @@ private fun VehicleDetailScreen(
     val current = vehicle
     Scaffold(
         topBar = {
-            Header(current?.plateNumber?.ifBlank { current.model } ?: "Машина", onBack) {
+            Header(current?.plateNumber ?: "Машина", onBack) {
                 IconButton(onClick = onEditVehicle) { Icon(Icons.Outlined.Edit, "Редактировать машину") }
                 IconButton(onClick = { confirmDelete = true }) { Icon(Icons.Outlined.Delete, "Удалить машину") }
             }
@@ -219,11 +232,7 @@ private fun VehicleDetailScreen(
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         CarPicture(current.photoPath, Modifier.size(92.dp))
                         Spacer(Modifier.width(14.dp))
-                        Column {
-                            Text(listOf(current.brand, current.model).filter(String::isNotBlank).joinToString(" "),
-                                style = MaterialTheme.typography.titleLarge)
-                            Text(current.plateNumber)
-                        }
+                        Text(current.plateNumber, style = MaterialTheme.typography.titleLarge)
                     }
                 }
             }
@@ -248,8 +257,6 @@ private fun VehicleDetailScreen(
                     Text("${money(repair.price)} ${if (repair.currencyCode == "RUB") "₽" else "сом"}",
                         style = MaterialTheme.typography.titleMedium)
                     Text(repair.description, maxLines = 3, overflow = TextOverflow.Ellipsis)
-                    RepairPhotoCount(vm, repair.id)
-                    TextButton(onClick = { onEditRepair(repair.id) }) { Text("Подробнее / редактировать") }
                 }
             }
         }
@@ -275,41 +282,32 @@ private fun VehicleDetailScreen(
 }
 
 @Composable
-private fun RepairPhotoCount(vm: JournalViewModel, repairId: Long) {
-    val photos by remember(repairId) { vm.repo.dao.observePhotos(repairId) }.collectAsState(initial = emptyList())
-    Text("Фото: ${photos.size}", color = MaterialTheme.colorScheme.primary,
-        style = MaterialTheme.typography.bodySmall)
-}
-
-@Composable
 private fun VehicleEditorScreen(
     vm: JournalViewModel, vehicleId: Long?, onBack: () -> Unit, onSaved: (Long) -> Unit
 ) {
-    val flow = remember(vehicleId) {
+    val vehicleFlow = remember(vehicleId) {
         if (vehicleId == null) flowOf(null) else vm.repo.dao.observeVehicle(vehicleId)
     }
-    val existing by flow.collectAsState(initial = null)
+    val existing by vehicleFlow.collectAsState(initial = null)
+    val photoFlow = remember(vehicleId) {
+        if (vehicleId == null) flowOf(emptyList<PhotoEntity>()) else vm.repo.dao.observePhotos(vehicleId)
+    }
+    val dbPhotos by photoFlow.collectAsState(initial = null as List<PhotoEntity>?)
     var plate by remember(vehicleId) { mutableStateOf("") }
-    var brand by remember(vehicleId) { mutableStateOf("") }
-    var model by remember(vehicleId) { mutableStateOf("") }
-    var cover by remember(vehicleId) { mutableStateOf<PhotoChoice?>(null) }
-    var removeCover by remember(vehicleId) { mutableStateOf(false) }
+    val photos = remember(vehicleId) { mutableStateListOf<PhotoChoice>() }
     var loaded by remember(vehicleId) { mutableStateOf(false) }
-    LaunchedEffect(existing?.id) {
-        if (existing != null && !loaded) {
+    LaunchedEffect(existing?.id, dbPhotos) {
+        if (existing != null && dbPhotos != null && !loaded) {
             plate = existing!!.plateNumber
-            brand = existing!!.brand
-            model = existing!!.model
-            cover = existing!!.photoPath?.let { PhotoChoice(existingId = -1L, uri = File(it).toUri()) }
+            photos.clear()
+            photos.addAll(dbPhotos!!.map { PhotoChoice(it.id, File(it.filePath).toUri()) })
             loaded = true
         }
     }
-    var addFirstRepair by remember { mutableStateOf(true) }
-    var date by remember { mutableLongStateOf(LocalDate.now().toEpochDay()) }
-    var currency by remember { mutableStateOf("KGS") }
-    var price by remember { mutableStateOf("") }
-    var description by remember { mutableStateOf("") }
-    val repairPhotos = remember { mutableStateListOf<PhotoChoice>() }
+    var date by remember(vehicleId) { mutableLongStateOf(LocalDate.now().toEpochDay()) }
+    var currency by remember(vehicleId) { mutableStateOf("KGS") }
+    var price by remember(vehicleId) { mutableStateOf("") }
+    var description by remember(vehicleId) { mutableStateOf("") }
     var busy by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
     val scope = rememberCoroutineScope()
@@ -323,42 +321,30 @@ private fun VehicleEditorScreen(
         ) {
             OutlinedTextField(plate, { plate = it }, label = { Text("Госномер") },
                 modifier = Modifier.fillMaxWidth(), singleLine = true,
-                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Next))
-            OutlinedTextField(brand, { brand = it }, label = { Text("Марка (необязательно)") },
-                modifier = Modifier.fillMaxWidth(), singleLine = true,
-                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Next))
-            OutlinedTextField(model, { model = it }, label = { Text("Модель") },
-                modifier = Modifier.fillMaxWidth(), singleLine = true,
                 keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
                 keyboardActions = KeyboardActions(onDone = { focus.clearFocus() }))
-            Text("Фото машины", fontWeight = FontWeight.SemiBold)
+            Text("Фотографии машины", fontWeight = FontWeight.SemiBold)
             PhotoPicker(
-                photos = listOfNotNull(cover), maxItems = 1,
-                onAdd = { chosen -> cover = chosen.firstOrNull(); removeCover = false },
-                onRemove = { cover = null; removeCover = true }
+                photos = photos.toList(), maxItems = 10,
+                onAdd = { photos.appendPhotos(it, 10) },
+                onRemove = { photos.remove(it) }
             )
             if (!isEditing) {
                 HorizontalDivider()
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text("Добавить первый ремонт", fontWeight = FontWeight.SemiBold,
-                        modifier = Modifier.weight(1f))
-                    Switch(checked = addFirstRepair, onCheckedChange = { addFirstRepair = it })
-                }
-                if (addFirstRepair) {
-                    RepairFields(date, { date = it }, currency, { currency = it },
-                        price, { price = it }, description, { description = it })
-                    Text("Фотографии ремонта", fontWeight = FontWeight.SemiBold)
-                    PhotoPicker(repairPhotos.toList(), 10, { repairPhotos.appendPhotos(it, 10) },
-                        { removed -> repairPhotos.remove(removed) })
-                }
+                Text("Первый ремонт", fontWeight = FontWeight.SemiBold)
+                Text("Можно оставить поля ремонта пустыми и добавить его позже.",
+                    style = MaterialTheme.typography.bodySmall)
+                RepairFields(date, { date = it }, currency, { currency = it },
+                    price, { price = it }, description, { description = it })
             }
             Button(
                 onClick = {
-                    if (plate.isBlank() && model.isBlank()) {
-                        error = "Укажите госномер или модель"; return@Button
+                    if (plate.isBlank()) {
+                        error = "Укажите госномер"; return@Button
                     }
-                    val amount = if (!isEditing && addFirstRepair) price.replace(',', '.').toDoubleOrNull() else null
-                    if (!isEditing && addFirstRepair && (description.isBlank() || amount == null || amount < 0)) {
+                    val hasRepair = description.isNotBlank() || price.isNotBlank()
+                    val amount = price.replace(',', '.').toDoubleOrNull()
+                    if (!isEditing && hasRepair && (description.isBlank() || amount == null || amount < 0)) {
                         error = "Для ремонта заполните описание и корректную стоимость"; return@Button
                     }
                     busy = true
@@ -367,19 +353,17 @@ private fun VehicleEditorScreen(
                         try {
                             val vehicle = VehicleEntity(
                                 id = existing?.id ?: 0, plateNumber = plate.trim(),
-                                brand = brand.trim(), model = model.trim(),
+                                brand = existing?.brand ?: "", model = existing?.model ?: "",
                                 photoPath = existing?.photoPath,
                                 createdAtEpochMs = existing?.createdAtEpochMs ?: System.currentTimeMillis()
                             )
+                            val newPhotoUris = photos.filter { it.existingId == null }.map { it.uri }
                             if (isEditing) {
-                                vm.editVehicle(vehicle,
-                                    if (cover?.existingId == null) cover?.uri else null, removeCover)
+                                vm.editVehicle(vehicle, photos.mapNotNull { it.existingId }.toSet(), newPhotoUris)
                                 onSaved(vehicleId!!)
                             } else {
-                                val repair = if (addFirstRepair) RepairDraft(date, amount!!,
-                                    description.trim(), currency) else null
-                                val newId = vm.addVehicle(vehicle, cover?.uri, repair,
-                                    if (addFirstRepair) repairPhotos.map { it.uri } else emptyList())
+                                val repair = if (hasRepair) RepairDraft(date, amount!!, description.trim(), currency) else null
+                                val newId = vm.addVehicle(vehicle, repair, newPhotoUris)
                                 onSaved(newId)
                             }
                         } catch (e: Exception) {
@@ -388,7 +372,7 @@ private fun VehicleEditorScreen(
                     }
                 }, enabled = !busy, modifier = Modifier.fillMaxWidth().height(54.dp),
                 shape = RoundedCornerShape(30.dp)
-            ) { Text(if (busy) "Сохраняем..." else if (isEditing) "Сохранить изменения" else "Сохранить машину и ремонт") }
+            ) { Text(if (busy) "Сохраняем..." else if (isEditing) "Сохранить изменения" else "Сохранить машину") }
             Spacer(Modifier.height(20.dp))
         }
     }
@@ -402,24 +386,20 @@ private fun RepairEditorScreen(
 ) {
     val repairFlow = remember(repairId) { if (repairId == null) flowOf(null) else vm.repo.dao.observeRepair(repairId) }
     val existing by repairFlow.collectAsState(initial = null)
-    val photoFlow = remember(repairId) {
-        if (repairId == null) flowOf(emptyList<PhotoEntity>()) else vm.repo.dao.observePhotos(repairId)
-    }
-    val photosFromDb by photoFlow.collectAsState(initial = null as List<PhotoEntity>?)
+    val vehiclePhotos by remember(vehicleId) { vm.repo.dao.observePhotos(vehicleId) }
+        .collectAsState(initial = emptyList())
     var loaded by remember(repairId) { mutableStateOf(false) }
     var date by remember(repairId) { mutableLongStateOf(LocalDate.now().toEpochDay()) }
     var currency by remember(repairId) { mutableStateOf("KGS") }
     var price by remember(repairId) { mutableStateOf("") }
     var description by remember(repairId) { mutableStateOf("") }
-    val photos = remember(repairId) { mutableStateListOf<PhotoChoice>() }
-    LaunchedEffect(existing?.id, photosFromDb) {
-        if (repairId != null && existing != null && photosFromDb != null && !loaded) {
+    val newVehiclePhotos = remember(repairId) { mutableStateListOf<PhotoChoice>() }
+    LaunchedEffect(existing?.id) {
+        if (repairId != null && existing != null && !loaded) {
             date = existing!!.dateEpochDay
             currency = existing!!.currencyCode
-            price = existing!!.price.toString()
+            price = priceForInput(existing!!.price)
             description = existing!!.description
-            photos.clear()
-            photos.addAll(photosFromDb!!.map { PhotoChoice(it.id, File(it.filePath).toUri()) })
             loaded = true
         }
     }
@@ -442,9 +422,12 @@ private fun RepairEditorScreen(
         ) {
             RepairFields(date, { date = it }, currency, { currency = it },
                 price, { price = it }, description, { description = it })
-            Text("Фотографии", fontWeight = FontWeight.SemiBold)
-            PhotoPicker(photos.toList(), 10, { photos.appendPhotos(it, 10) },
-                { removed -> photos.remove(removed) })
+            Text("Добавить фотографии машины", fontWeight = FontWeight.SemiBold)
+            Text("Снимки сохраняются в общей галерее автомобиля, а не в ремонте.",
+                style = MaterialTheme.typography.bodySmall)
+            PhotoPicker(newVehiclePhotos.toList(), (10 - vehiclePhotos.size).coerceAtLeast(0),
+                { newVehiclePhotos.appendPhotos(it, (10 - vehiclePhotos.size).coerceAtLeast(0)) },
+                { removed -> newVehiclePhotos.remove(removed) })
             Button(onClick = {
                 val amount = price.replace(',', '.').toDoubleOrNull()
                 if (amount == null || amount < 0 || description.isBlank()) {
@@ -459,8 +442,7 @@ private fun RepairEditorScreen(
                                 dateEpochDay = date, price = amount,
                                 description = description.trim(), currencyCode = currency,
                                 repairType = existing?.repairType ?: "Общий ремонт"),
-                            photos.mapNotNull { it.existingId }.toSet(),
-                            photos.filter { it.existingId == null }.map { it.uri }
+                            newVehiclePhotos.map { it.uri }
                         )
                         onSaved()
                     } catch (e: Exception) { error = e.localizedMessage ?: "Не удалось сохранить ремонт" }
@@ -477,7 +459,7 @@ private fun RepairEditorScreen(
         AlertDialog(
             onDismissRequest = { confirmDelete = false },
             title = { Text("Удалить ремонт?") },
-            text = { Text("Ремонт и его фотографии будут удалены без возможности восстановления.") },
+            text = { Text("Ремонт будет удалён. Фотографии машины сохранятся.") },
             confirmButton = { TextButton(onClick = {
                 confirmDelete = false
                 scope.launch {

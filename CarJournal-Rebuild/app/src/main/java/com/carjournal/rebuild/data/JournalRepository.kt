@@ -8,7 +8,6 @@ import kotlinx.coroutines.withContext
 import java.io.File
 import java.util.UUID
 
-/** Создание ремонта, до 10 фото. Стоимость хранится в исходной валюте, без конвертации. */
 data class RepairDraft(
     val dateEpochDay: Long,
     val price: Double,
@@ -21,7 +20,6 @@ class JournalRepository(
     private val db: JournalDatabase
 ) {
     val dao = db.dao()
-
     private val photoFolder = File(context.filesDir, "journal_photos")
 
     private fun importPhoto(uri: Uri): String {
@@ -39,7 +37,6 @@ class JournalRepository(
         }
     }
 
-    /** Удаляем только собственные копии файлов, не фотографии из галереи телефона. */
     private fun deleteOwnPhoto(path: String?) {
         if (path.isNullOrBlank()) return
         val file = File(path)
@@ -48,29 +45,24 @@ class JournalRepository(
 
     suspend fun createVehicle(
         vehicle: VehicleEntity,
-        coverUri: Uri?,
         firstRepair: RepairDraft?,
-        repairPhotos: List<Uri>
+        photoUris: List<Uri>
     ): Long = withContext(Dispatchers.IO) {
-        require(firstRepair != null || repairPhotos.isEmpty())
-        require(repairPhotos.size <= 10) { "Можно прикрепить до 10 фотографий" }
+        require(photoUris.size <= 10) { "Можно прикрепить до 10 фотографий" }
         val imported = mutableListOf<String>()
         try {
-            val coverPath = coverUri?.let { importPhoto(it).also(imported::add) }
-            val photoPaths = repairPhotos.map { importPhoto(it).also(imported::add) }
+            photoUris.forEach { imported.add(importPhoto(it)) }
             db.withTransaction {
-                val vehicleId = dao.insertVehicle(vehicle.copy(photoPath = coverPath))
+                val vehicleId = dao.insertVehicle(vehicle.copy(photoPath = imported.firstOrNull()))
+                imported.forEach { dao.insertPhoto(PhotoEntity(vehicleId = vehicleId, filePath = it)) }
                 if (firstRepair != null) {
-                    val repairId = dao.insertRepair(
-                        RepairEntity(
-                            vehicleId = vehicleId,
-                            dateEpochDay = firstRepair.dateEpochDay,
-                            price = firstRepair.price,
-                            description = firstRepair.description.trim(),
-                            currencyCode = firstRepair.currencyCode
-                        )
-                    )
-                    photoPaths.forEach { path -> dao.insertPhoto(PhotoEntity(repairId = repairId, filePath = path)) }
+                    dao.insertRepair(RepairEntity(
+                        vehicleId = vehicleId,
+                        dateEpochDay = firstRepair.dateEpochDay,
+                        price = firstRepair.price,
+                        description = firstRepair.description.trim(),
+                        currencyCode = firstRepair.currencyCode
+                    ))
                 }
                 vehicleId
             }
@@ -80,41 +72,34 @@ class JournalRepository(
         }
     }
 
+    /** Все фотографии принадлежат машине, даже если их добавили на экране ремонта. */
     suspend fun updateVehicle(
         vehicle: VehicleEntity,
-        newCoverUri: Uri?,
-        removeCover: Boolean
+        keepPhotoIds: Set<Long>,
+        photoUris: List<Uri>
     ) = withContext(Dispatchers.IO) {
-        var importedPath: String? = null
-        try {
-            importedPath = newCoverUri?.let(::importPhoto)
-            val newPath = if (newCoverUri != null) importedPath else if (removeCover) null else vehicle.photoPath
-            db.withTransaction { dao.updateVehicle(vehicle.copy(photoPath = newPath)) }
-            if (newPath != vehicle.photoPath) deleteOwnPhoto(vehicle.photoPath)
-        } catch (exception: Exception) {
-            deleteOwnPhoto(importedPath)
-            throw exception
-        }
+        saveVehiclePhotos(vehicle.id, keepPhotoIds, photoUris, vehicle)
     }
 
-    suspend fun saveRepair(
-        repair: RepairEntity,
+    private suspend fun saveVehiclePhotos(
+        vehicleId: Long,
         keepPhotoIds: Set<Long>,
-        newPhotoUris: List<Uri>
-    ) = withContext(Dispatchers.IO) {
-        require(keepPhotoIds.size + newPhotoUris.size <= 10)
+        photoUris: List<Uri>,
+        editedVehicle: VehicleEntity? = null
+    ) {
+        val current = dao.photosNow(vehicleId)
+        val retained = current.filter { it.id in keepPhotoIds }
+        require(retained.size + photoUris.size <= 10) { "Можно прикрепить до 10 фотографий" }
+        val removed = current.filter { it.id !in keepPhotoIds }
         val imported = mutableListOf<String>()
         try {
-            val current = if (repair.id == 0L) emptyList() else dao.photosNow(repair.id)
-            val removed = current.filter { it.id !in keepPhotoIds }
-            newPhotoUris.forEach { imported.add(importPhoto(it)) }
+            photoUris.forEach { imported.add(importPhoto(it)) }
+            val coverPath = (retained.firstOrNull()?.filePath ?: imported.firstOrNull())
             db.withTransaction {
-                val repairId = if (repair.id == 0L) dao.insertRepair(repair) else {
-                    dao.updateRepair(repair)
-                    repair.id
-                }
+                if (editedVehicle != null) dao.updateVehicle(editedVehicle.copy(photoPath = coverPath))
+                else dao.updateCoverPath(vehicleId, coverPath)
                 if (removed.isNotEmpty()) dao.deletePhotos(removed.map { it.id })
-                imported.forEach { dao.insertPhoto(PhotoEntity(repairId = repairId, filePath = it)) }
+                imported.forEach { dao.insertPhoto(PhotoEntity(vehicleId = vehicleId, filePath = it)) }
             }
             removed.forEach { deleteOwnPhoto(it.filePath) }
         } catch (exception: Exception) {
@@ -123,15 +108,34 @@ class JournalRepository(
         }
     }
 
+    suspend fun saveRepair(
+        repair: RepairEntity,
+        newVehiclePhotos: List<Uri>
+    ) = withContext(Dispatchers.IO) {
+        val current = dao.photosNow(repair.vehicleId)
+        require(current.size + newVehiclePhotos.size <= 10) { "В машине может быть не больше 10 фотографий" }
+        val imported = mutableListOf<String>()
+        try {
+            newVehiclePhotos.forEach { imported.add(importPhoto(it)) }
+            db.withTransaction {
+                if (repair.id == 0L) dao.insertRepair(repair) else dao.updateRepair(repair)
+                imported.forEach { dao.insertPhoto(PhotoEntity(vehicleId = repair.vehicleId, filePath = it)) }
+                if (current.isEmpty() && imported.isNotEmpty()) dao.updateCoverPath(repair.vehicleId, imported.first())
+            }
+        } catch (exception: Exception) {
+            imported.forEach(::deleteOwnPhoto)
+            throw exception
+        }
+    }
+
     suspend fun deleteRepair(repairId: Long) = withContext(Dispatchers.IO) {
-        val paths = dao.photosNow(repairId).map { it.filePath }
+        // Удаление ремонта не трогает общую галерею автомобиля.
         db.withTransaction { dao.deleteRepair(repairId) }
-        paths.forEach(::deleteOwnPhoto)
     }
 
     suspend fun deleteVehicle(vehicleId: Long) = withContext(Dispatchers.IO) {
-        val allPaths = dao.vehiclePhotoPathsNow(vehicleId) + listOfNotNull(dao.vehicleCoverPathNow(vehicleId))
+        val paths = dao.vehiclePhotoPathsNow(vehicleId) + listOfNotNull(dao.vehicleCoverPathNow(vehicleId))
         db.withTransaction { dao.deleteVehicle(vehicleId) }
-        allPaths.forEach(::deleteOwnPhoto)
+        paths.distinct().forEach(::deleteOwnPhoto)
     }
 }

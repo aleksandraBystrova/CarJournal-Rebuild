@@ -1,6 +1,8 @@
 package com.carjournal.rebuild.data
 
 import androidx.room.*
+import androidx.room.migration.Migration
+import androidx.sqlite.db.SupportSQLiteDatabase
 import kotlinx.coroutines.flow.Flow
 
 /** Поля, представляющие старую схему APK; база этой сборки отдельная. */
@@ -35,14 +37,14 @@ data class RepairEntity(
 @Entity(
     tableName = "photos",
     foreignKeys = [ForeignKey(
-        entity = RepairEntity::class,
-        parentColumns = ["id"], childColumns = ["repairId"],
+        entity = VehicleEntity::class,
+        parentColumns = ["id"], childColumns = ["vehicleId"],
         onDelete = ForeignKey.CASCADE
-    )], indices = [Index("repairId")]
+    )], indices = [Index("vehicleId")]
 )
 data class PhotoEntity(
     @PrimaryKey(autoGenerate = true) val id: Long = 0,
-    val repairId: Long,
+    val vehicleId: Long,
     val filePath: String,
     val createdAtEpochMs: Long = System.currentTimeMillis()
 )
@@ -89,13 +91,13 @@ interface JournalDao {
     @Query("SELECT * FROM repairs WHERE id=:id LIMIT 1")
     fun observeRepair(id: Long): Flow<RepairEntity?>
 
-    @Query("SELECT * FROM photos WHERE repairId=:repairId ORDER BY id ASC")
-    fun observePhotos(repairId: Long): Flow<List<PhotoEntity>>
+    @Query("SELECT * FROM photos WHERE vehicleId=:vehicleId ORDER BY id ASC")
+    fun observePhotos(vehicleId: Long): Flow<List<PhotoEntity>>
 
-    @Query("SELECT * FROM photos WHERE repairId=:repairId ORDER BY id ASC")
-    suspend fun photosNow(repairId: Long): List<PhotoEntity>
+    @Query("SELECT * FROM photos WHERE vehicleId=:vehicleId ORDER BY id ASC")
+    suspend fun photosNow(vehicleId: Long): List<PhotoEntity>
 
-    @Query("SELECT p.filePath FROM photos p JOIN repairs r ON p.repairId=r.id WHERE r.vehicleId=:vehicleId")
+    @Query("SELECT filePath FROM photos WHERE vehicleId=:vehicleId")
     suspend fun vehiclePhotoPathsNow(vehicleId: Long): List<String>
 
     @Query("SELECT photoPath FROM vehicles WHERE id=:vehicleId LIMIT 1")
@@ -119,13 +121,50 @@ interface JournalDao {
     @Query("DELETE FROM repairs WHERE id=:id") suspend fun deleteRepair(id: Long)
     @Insert suspend fun insertPhoto(photo: PhotoEntity): Long
     @Query("DELETE FROM photos WHERE id IN (:ids)") suspend fun deletePhotos(ids: List<Long>)
+    @Query("UPDATE vehicles SET photoPath = :path WHERE id = :vehicleId")
+    suspend fun updateCoverPath(vehicleId: Long, path: String?)
 }
 
 @Database(
     entities = [VehicleEntity::class, RepairEntity::class, PhotoEntity::class],
-    version = 1,
+    version = 2,
     exportSchema = false
 )
 abstract class JournalDatabase : RoomDatabase() {
     abstract fun dao(): JournalDao
+}
+
+/** Переносит старые фотографии ремонтов в общую галерею автомобиля.
+ * Копии файлов остаются на месте; меняется только связь в Room.
+ */
+val MIGRATION_1_2 = object : Migration(1, 2) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL("""
+            CREATE TABLE photos_new (
+                id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                vehicleId INTEGER NOT NULL,
+                filePath TEXT NOT NULL,
+                createdAtEpochMs INTEGER NOT NULL,
+                FOREIGN KEY(vehicleId) REFERENCES vehicles(id) ON DELETE CASCADE
+            )
+        """.trimIndent())
+        db.execSQL("""
+            INSERT INTO photos_new (id, vehicleId, filePath, createdAtEpochMs)
+            SELECT p.id, r.vehicleId, p.filePath, p.createdAtEpochMs
+            FROM photos p INNER JOIN repairs r ON r.id = p.repairId
+        """.trimIndent())
+        // Старое фото обложки теперь тоже часть галереи машины.
+        db.execSQL("""
+            INSERT INTO photos_new (vehicleId, filePath, createdAtEpochMs)
+            SELECT v.id, v.photoPath, v.createdAtEpochMs
+            FROM vehicles v
+            WHERE v.photoPath IS NOT NULL AND v.photoPath != ''
+              AND NOT EXISTS (
+                  SELECT 1 FROM photos_new p WHERE p.vehicleId = v.id AND p.filePath = v.photoPath
+              )
+        """.trimIndent())
+        db.execSQL("DROP TABLE photos")
+        db.execSQL("ALTER TABLE photos_new RENAME TO photos")
+        db.execSQL("CREATE INDEX index_photos_vehicleId ON photos(vehicleId)")
+    }
 }
