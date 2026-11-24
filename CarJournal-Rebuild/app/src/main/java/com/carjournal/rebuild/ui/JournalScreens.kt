@@ -30,6 +30,7 @@ import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.window.Dialog
 import androidx.core.net.toUri
 import coil.compose.AsyncImage
 import com.carjournal.rebuild.data.*
@@ -300,6 +301,7 @@ private fun VehicleDetailScreen(
 ) {
     val vehicle by remember(id) { vm.repo.dao.observeVehicle(id) }.collectAsState(initial = null)
     val repairs by remember(id) { vm.repo.dao.observeRepairs(id) }.collectAsState(initial = emptyList())
+    val vehiclePhotos by remember(id) { vm.repo.dao.observePhotos(id) }.collectAsState(initial = emptyList())
     val scope = rememberCoroutineScope()
     var search by remember { mutableStateOf("") }
     var confirmDelete by remember { mutableStateOf(false) }
@@ -325,6 +327,10 @@ private fun VehicleDetailScreen(
                         Text(current.plateNumber, style = MaterialTheme.typography.titleLarge)
                     }
                 }
+            }
+            // Общая галерея автомобиля, включая снимки, добавленные при ремонтах.
+            if (current != null) {
+                item { VehiclePhotoGallery(vehiclePhotos, onEditVehicle) }
             }
             item {
                 OutlinedTextField(search, { search = it }, modifier = Modifier.fillMaxWidth(),
@@ -368,6 +374,63 @@ private fun VehicleDetailScreen(
         AlertDialog(onDismissRequest = { error = null }, confirmButton = {
             TextButton(onClick = { error = null }) { Text("OK") }
         }, title = { Text("Ошибка") }, text = { Text(error ?: "") })
+    }
+}
+
+/** Все снимки машины находятся в одном месте, независимо от того, при каком ремонте добавлены. */
+@Composable
+private fun VehiclePhotoGallery(photos: List<PhotoEntity>, onEditVehicle: () -> Unit) {
+    var selectedPath by remember { mutableStateOf<String?>(null) }
+    Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text("Фотографии машины (${photos.size}/10)",
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.SemiBold,
+                modifier = Modifier.weight(1f))
+            TextButton(onClick = onEditVehicle) {
+                Text(if (photos.isEmpty()) "Добавить фото" else "Изменить фото")
+            }
+        }
+        if (photos.isEmpty()) {
+            Text("Пока нет фотографий. Их можно добавить здесь или при новом ремонте.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant)
+        } else {
+            LazyRow(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                items(photos, key = { it.id }) { photo ->
+                    AsyncImage(
+                        model = File(photo.filePath),
+                        contentDescription = "Открыть фотографию машины",
+                        contentScale = ContentScale.Crop,
+                        modifier = Modifier.size(104.dp)
+                            .clip(RoundedCornerShape(14.dp))
+                            .clickable { selectedPath = photo.filePath }
+                    )
+                }
+            }
+        }
+    }
+    val openedPath = selectedPath
+    if (openedPath != null) {
+        Dialog(onDismissRequest = { selectedPath = null }) {
+            Surface(shape = RoundedCornerShape(16.dp), modifier = Modifier.fillMaxWidth()) {
+                Column(Modifier.padding(12.dp)) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text("Фото машины", modifier = Modifier.weight(1f),
+                            style = MaterialTheme.typography.titleMedium)
+                        IconButton(onClick = { selectedPath = null }) {
+                            Icon(Icons.Outlined.Close, contentDescription = "Закрыть")
+                        }
+                    }
+                    AsyncImage(
+                        model = File(openedPath),
+                        contentDescription = "Фотография машины",
+                        contentScale = ContentScale.Fit,
+                        modifier = Modifier.fillMaxWidth().heightIn(min = 220.dp, max = 520.dp)
+                    )
+                }
+            }
+        }
     }
 }
 
