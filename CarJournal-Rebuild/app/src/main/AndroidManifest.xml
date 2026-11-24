@@ -4,7 +4,9 @@
     <application
         android:name=".JournalApplication"
         android:allowBackup="false"
-        android:label="Журнал машин (облако)"
+        android:label="Журнал ремонта"
+        android:icon="@mipmap/ic_launcher"
+        android:roundIcon="@mipmap/ic_launcher"
         android:supportsRtl="true"
         android:theme="@style/Theme.CarJournal">
         <provider

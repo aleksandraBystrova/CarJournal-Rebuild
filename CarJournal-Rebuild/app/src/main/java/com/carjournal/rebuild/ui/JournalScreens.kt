@@ -133,7 +133,7 @@ private fun CloudLoginScreen(vm: JournalViewModel) {
         Icon(Icons.Outlined.Cloud, contentDescription = null, modifier = Modifier.size(54.dp),
             tint = MaterialTheme.colorScheme.primary)
         Spacer(Modifier.height(20.dp))
-        Text("Журнал машин", style = MaterialTheme.typography.headlineMedium,
+        Text("Журнал ремонта", style = MaterialTheme.typography.headlineMedium,
             fontWeight = FontWeight.Bold)
         Spacer(Modifier.height(8.dp))
         Text("Общий аккаунт мастерской",
@@ -368,9 +368,6 @@ private fun StatisticsScreen(vm: JournalViewModel, onBack: () -> Unit) {
                         }
                     }
                 }
-                Text("При необходимости прокрути таблицу вправо.",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
         }
     }
