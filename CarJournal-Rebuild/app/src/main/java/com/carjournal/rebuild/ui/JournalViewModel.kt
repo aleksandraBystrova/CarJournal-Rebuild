@@ -9,13 +9,18 @@ import com.carjournal.rebuild.data.JournalTotals
 import com.carjournal.rebuild.data.RepairDraft
 import com.carjournal.rebuild.data.RepairEntity
 import com.carjournal.rebuild.data.VehicleEntity
+import com.carjournal.rebuild.data.YearlyRepairStats
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.stateIn
 
 class JournalViewModel(application: Application) : AndroidViewModel(application) {
     val repo = (application as JournalApplication).repository
     val vehicles = repo.dao.observeVehicles().stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
-    val totals = repo.dao.observeTotals().stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), JournalTotals(0, 0, 0, 0.0, 0.0))
+    val totals = repo.dao.observeTotals().stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), JournalTotals(0, 0.0, 0.0))
+
+    val yearlyStats = repo.dao.observeYearlyStats().stateIn(
+        viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList<YearlyRepairStats>()
+    )
 
     suspend fun addVehicle(vehicle: VehicleEntity, repair: RepairDraft?, photos: List<Uri>) =
         repo.createVehicle(vehicle, repair, photos)

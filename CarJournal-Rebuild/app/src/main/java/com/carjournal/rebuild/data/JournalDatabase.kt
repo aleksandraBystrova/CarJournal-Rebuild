@@ -62,8 +62,14 @@ data class VehicleWithStats(
 )
 
 data class JournalTotals(
-    val totalVehicles: Int,
-    val repairedVehicles: Int,
+    val repairsCount: Int,
+    val totalSom: Double,
+    val totalRub: Double
+)
+
+/** Сводка ремонтов по году, выбранному в поле даты ремонта. */
+data class YearlyRepairStats(
+    val year: Int,
     val repairsCount: Int,
     val totalSom: Double,
     val totalRub: Double
@@ -105,13 +111,23 @@ interface JournalDao {
 
     @Query("""
         SELECT
-        (SELECT COUNT(*) FROM vehicles) AS totalVehicles,
-        (SELECT COUNT(DISTINCT vehicleId) FROM repairs) AS repairedVehicles,
         (SELECT COUNT(*) FROM repairs) AS repairsCount,
         (SELECT COALESCE(SUM(price), 0) FROM repairs WHERE currencyCode='KGS') AS totalSom,
         (SELECT COALESCE(SUM(price), 0) FROM repairs WHERE currencyCode='RUB') AS totalRub
     """)
     fun observeTotals(): Flow<JournalTotals>
+
+    @Query("""
+        SELECT
+            CAST(strftime('%Y', dateEpochDay * 86400, 'unixepoch') AS INTEGER) AS year,
+            CAST(COUNT(*) AS INTEGER) AS repairsCount,
+            COALESCE(SUM(CASE WHEN currencyCode = 'KGS' THEN price ELSE 0 END), 0) AS totalSom,
+            COALESCE(SUM(CASE WHEN currencyCode = 'RUB' THEN price ELSE 0 END), 0) AS totalRub
+        FROM repairs
+        GROUP BY CAST(strftime('%Y', dateEpochDay * 86400, 'unixepoch') AS INTEGER)
+        ORDER BY year DESC
+    """)
+    fun observeYearlyStats(): Flow<List<YearlyRepairStats>>
 
     @Insert suspend fun insertVehicle(vehicle: VehicleEntity): Long
     @Update suspend fun updateVehicle(vehicle: VehicleEntity)

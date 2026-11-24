@@ -12,6 +12,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
@@ -53,6 +54,7 @@ private fun priceForInput(value: Double): String =
 
 private sealed interface Page {
     data object ListPage : Page
+    data object StatisticsPage : Page
     data class VehiclePage(val vehicleId: Long) : Page
     data class EditVehiclePage(val vehicleId: Long?) : Page
     data class EditRepairPage(val vehicleId: Long, val repairId: Long?) : Page
@@ -64,6 +66,7 @@ fun JournalApp(vm: JournalViewModel) {
     val back: () -> Unit = {
         page = when (val p = page) {
             is Page.ListPage -> Page.ListPage
+            is Page.StatisticsPage -> Page.ListPage
             is Page.VehiclePage -> Page.ListPage
             is Page.EditVehiclePage -> p.vehicleId?.let { Page.VehiclePage(it) } ?: Page.ListPage
             is Page.EditRepairPage -> Page.VehiclePage(p.vehicleId)
@@ -72,7 +75,9 @@ fun JournalApp(vm: JournalViewModel) {
     BackHandler(enabled = page !is Page.ListPage) { back() }
     when (val p = page) {
         is Page.ListPage -> VehicleListScreen(vm, onOpen = { page = Page.VehiclePage(it) },
-            onCreate = { page = Page.EditVehiclePage(null) })
+            onCreate = { page = Page.EditVehiclePage(null) },
+            onStatistics = { page = Page.StatisticsPage })
+        is Page.StatisticsPage -> StatisticsScreen(vm, onBack = back)
         is Page.VehiclePage -> VehicleDetailScreen(vm, p.vehicleId,
             onBack = back,
             onEditVehicle = { page = Page.EditVehiclePage(p.vehicleId) },
@@ -113,7 +118,12 @@ private fun SoftCard(content: @Composable ColumnScope.() -> Unit) {
 }
 
 @Composable
-private fun VehicleListScreen(vm: JournalViewModel, onOpen: (Long) -> Unit, onCreate: () -> Unit) {
+private fun VehicleListScreen(
+    vm: JournalViewModel,
+    onOpen: (Long) -> Unit,
+    onCreate: () -> Unit,
+    onStatistics: () -> Unit
+) {
     val vehicles by vm.vehicles.collectAsState()
     val totals by vm.totals.collectAsState()
     var query by remember { mutableStateOf("") }
@@ -121,7 +131,15 @@ private fun VehicleListScreen(vm: JournalViewModel, onOpen: (Long) -> Unit, onCr
         vehicles.filter { it.plateNumber.contains(query, ignoreCase = true) }
     }
     Scaffold(
-        topBar = { Header("Машины") },
+        topBar = {
+            Header("Машины") {
+                TextButton(onClick = onStatistics) {
+                    Icon(Icons.Outlined.BarChart, contentDescription = null, modifier = Modifier.size(20.dp))
+                    Spacer(Modifier.width(5.dp))
+                    Text("Статистика")
+                }
+            }
+        },
         floatingActionButton = { LargeFloatingActionButton(onClick = onCreate) {
             Icon(Icons.Outlined.Add, "Добавить машину")
         } }
@@ -141,25 +159,35 @@ private fun VehicleListScreen(vm: JournalViewModel, onOpen: (Long) -> Unit, onCr
             }
             item {
                 SoftCard {
-                    Text("Всего ремонтов: ${totals.repairsCount}",
-                        style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text("Всего ремонтов", style = MaterialTheme.typography.titleMedium,
+                            modifier = Modifier.weight(1f))
+                        Text(totals.repairsCount.toString(),
+                            style = MaterialTheme.typography.headlineMedium,
+                            fontWeight = FontWeight.Bold)
+                    }
+                    Spacer(Modifier.height(12.dp))
+                    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+                    Spacer(Modifier.height(12.dp))
+                    Text("Общая стоимость", style = MaterialTheme.typography.labelLarge,
+                        color = MaterialTheme.colorScheme.onSecondaryContainer)
                     Spacer(Modifier.height(10.dp))
-                    Text("Общая сумма", style = MaterialTheme.typography.bodyMedium)
-                    Spacer(Modifier.height(8.dp))
-                    Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                        Card(modifier = Modifier.weight(1f),
-                            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {
-                            Column(Modifier.padding(12.dp)) {
-                                Text("Сомы", style = MaterialTheme.typography.labelMedium)
-                                Text("${money(totals.totalSom)} сом", fontWeight = FontWeight.Bold)
-                            }
+                    Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+                        Column(Modifier.weight(1f)) {
+                            Text("Сомы", style = MaterialTheme.typography.labelMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            Text(money(totals.totalSom), style = MaterialTheme.typography.titleLarge,
+                                fontWeight = FontWeight.SemiBold)
+                            Text("сом", style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant)
                         }
-                        Card(modifier = Modifier.weight(1f),
-                            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {
-                            Column(Modifier.padding(12.dp)) {
-                                Text("Рубли", style = MaterialTheme.typography.labelMedium)
-                                Text("${money(totals.totalRub)} ₽", fontWeight = FontWeight.Bold)
-                            }
+                        Column(Modifier.weight(1f)) {
+                            Text("Рубли", style = MaterialTheme.typography.labelMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            Text(money(totals.totalRub), style = MaterialTheme.typography.titleLarge,
+                                fontWeight = FontWeight.SemiBold)
+                            Text("руб", style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant)
                         }
                     }
                 }
@@ -190,6 +218,68 @@ private fun VehicleListScreen(vm: JournalViewModel, onOpen: (Long) -> Unit, onCr
             }
         }
     }
+}
+
+/** Год берётся из даты ремонта, а рубли и сомы никогда не складываются между собой. */
+@Composable
+private fun StatisticsScreen(vm: JournalViewModel, onBack: () -> Unit) {
+    val years by vm.yearlyStats.collectAsState()
+    Scaffold(topBar = { Header("Статистика", onBack) }) { padding ->
+        Column(
+            Modifier.fillMaxSize().padding(padding).padding(horizontal = 16.dp, vertical = 12.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            Text("Ремонты по годам", style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.SemiBold)
+            Text("Суммы учитываются отдельно по каждой валюте.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant)
+            if (years.isEmpty()) {
+                Text("Пока нет ремонтов для статистики.", modifier = Modifier.padding(top = 18.dp))
+            } else {
+                val tableScroll = rememberScrollState()
+                Column(Modifier.fillMaxWidth().horizontalScroll(tableScroll)) {
+                    Row(
+                        Modifier.background(MaterialTheme.colorScheme.secondaryContainer)
+                            .padding(vertical = 10.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        StatsText("Год", 74.dp, true)
+                        StatsText("Ремонтов", 96.dp, true)
+                        Column(Modifier.width(260.dp)) {
+                            Text("Стоимость", modifier = Modifier.fillMaxWidth(),
+                                style = MaterialTheme.typography.labelLarge,
+                                textAlign = androidx.compose.ui.text.style.TextAlign.Center)
+                            Row {
+                                StatsText("Сом", 130.dp, true)
+                                StatsText("Рубль", 130.dp, true)
+                            }
+                        }
+                    }
+                    years.forEach { item ->
+                        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+                        Row(Modifier.padding(vertical = 14.dp), verticalAlignment = Alignment.CenterVertically) {
+                            StatsText(item.year.toString(), 74.dp, true)
+                            StatsText(item.repairsCount.toString(), 96.dp)
+                            StatsText(money(item.totalSom), 130.dp)
+                            StatsText(money(item.totalRub), 130.dp)
+                        }
+                    }
+                }
+                Text("При необходимости прокрути таблицу вправо.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+        }
+    }
+}
+
+@Composable
+private fun StatsText(text: String, width: androidx.compose.ui.unit.Dp, bold: Boolean = false) {
+    Text(text, modifier = Modifier.width(width).padding(horizontal = 8.dp),
+        fontWeight = if (bold) FontWeight.SemiBold else FontWeight.Normal,
+        style = MaterialTheme.typography.bodyMedium, maxLines = 1,
+        overflow = TextOverflow.Ellipsis)
 }
 
 @Composable
