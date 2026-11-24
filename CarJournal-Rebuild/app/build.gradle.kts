@@ -14,11 +14,15 @@ android {
         applicationId = "com.carjournal.rebuild"
         minSdk = 26
         targetSdk = 35
-        versionCode = 4
-        versionName = "0.3.1"
+        versionCode = 5
+        versionName = "0.4.0-cloud-preview"
     }
 
     buildTypes {
+        debug {
+            // Run this pilot alongside the previous app. Different GitHub runners use different debug keys.
+            applicationIdSuffix = ".cloudpreview"
+        }
         release {
             isMinifyEnabled = false
         }

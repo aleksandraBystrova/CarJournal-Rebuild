@@ -13,7 +13,9 @@ data class VehicleEntity(
     val brand: String = "",
     val model: String,
     val photoPath: String? = null,
-    val createdAtEpochMs: Long = System.currentTimeMillis()
+    val createdAtEpochMs: Long = System.currentTimeMillis(),
+    @ColumnInfo(defaultValue = "''") val cloudId: String = "",
+    @ColumnInfo(defaultValue = "1") val syncDirty: Boolean = true
 )
 
 @Entity(
@@ -31,7 +33,9 @@ data class RepairEntity(
     val repairType: String = "Общий ремонт",
     val price: Double,
     val description: String,
-    val currencyCode: String = "KGS"
+    val currencyCode: String = "KGS",
+    @ColumnInfo(defaultValue = "''") val cloudId: String = "",
+    @ColumnInfo(defaultValue = "1") val syncDirty: Boolean = true
 )
 
 @Entity(
@@ -46,7 +50,17 @@ data class PhotoEntity(
     @PrimaryKey(autoGenerate = true) val id: Long = 0,
     val vehicleId: Long,
     val filePath: String,
-    val createdAtEpochMs: Long = System.currentTimeMillis()
+    val createdAtEpochMs: Long = System.currentTimeMillis(),
+    @ColumnInfo(defaultValue = "''") val cloudId: String = "",
+    @ColumnInfo(defaultValue = "1") val syncDirty: Boolean = true,
+    val storagePath: String? = null
+)
+
+@Entity(tableName = "pending_deletions")
+data class PendingDeletion(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val entityType: String,
+    val cloudId: String
 )
 
 data class VehicleWithStats(
@@ -129,6 +143,29 @@ interface JournalDao {
     """)
     fun observeYearlyStats(): Flow<List<YearlyRepairStats>>
 
+    // All cloud IDs are stable across retries. Rows without cloudId came from Room v2.
+    @Query("SELECT * FROM vehicles ORDER BY id") suspend fun allVehicles(): List<VehicleEntity>
+    @Query("SELECT * FROM repairs ORDER BY id") suspend fun allRepairs(): List<RepairEntity>
+    @Query("SELECT * FROM photos ORDER BY id") suspend fun allPhotos(): List<PhotoEntity>
+    @Query("SELECT * FROM vehicles WHERE id = :id LIMIT 1") suspend fun vehicleNow(id: Long): VehicleEntity?
+    @Query("SELECT * FROM repairs WHERE id = :id LIMIT 1") suspend fun repairNow(id: Long): RepairEntity?
+    @Query("SELECT * FROM vehicles WHERE cloudId = :uuid LIMIT 1") suspend fun vehicleByCloudId(uuid: String): VehicleEntity?
+    @Query("SELECT * FROM repairs WHERE cloudId = :uuid LIMIT 1") suspend fun repairByCloudId(uuid: String): RepairEntity?
+    @Query("SELECT * FROM photos WHERE cloudId = :uuid LIMIT 1") suspend fun photoByCloudId(uuid: String): PhotoEntity?
+    @Insert suspend fun insertDeletion(deletion: PendingDeletion)
+    @Query("SELECT * FROM pending_deletions ORDER BY id") suspend fun pendingDeletions(): List<PendingDeletion>
+    @Query("DELETE FROM pending_deletions WHERE id = :id") suspend fun clearDeletion(id: Long)
+    @Query("UPDATE vehicles SET cloudId = :uuid WHERE id = :id") suspend fun setVehicleCloudId(id: Long, uuid: String)
+    @Query("UPDATE repairs SET cloudId = :uuid WHERE id = :id") suspend fun setRepairCloudId(id: Long, uuid: String)
+    @Query("UPDATE photos SET cloudId = :uuid WHERE id = :id") suspend fun setPhotoCloudId(id: Long, uuid: String)
+    @Query("UPDATE photos SET storagePath = :path WHERE id = :id") suspend fun setPhotoStoragePath(id: Long, path: String)
+    @Query("UPDATE vehicles SET syncDirty = 0 WHERE id = :id AND cloudId = :uuid AND plateNumber = :plate")
+    suspend fun markVehicleClean(id: Long, uuid: String, plate: String)
+    @Query("UPDATE repairs SET syncDirty = 0 WHERE id = :id AND cloudId = :uuid AND description = :description AND price = :price AND currencyCode = :currency AND dateEpochDay = :day")
+    suspend fun markRepairClean(id: Long, uuid: String, description: String, price: Double, currency: String, day: Long)
+    @Query("UPDATE photos SET syncDirty = 0 WHERE id = :id AND cloudId = :uuid AND storagePath = :path")
+    suspend fun markPhotoClean(id: Long, uuid: String, path: String)
+
     @Insert suspend fun insertVehicle(vehicle: VehicleEntity): Long
     @Update suspend fun updateVehicle(vehicle: VehicleEntity)
     @Query("DELETE FROM vehicles WHERE id=:id") suspend fun deleteVehicle(id: Long)
@@ -136,14 +173,15 @@ interface JournalDao {
     @Update suspend fun updateRepair(repair: RepairEntity)
     @Query("DELETE FROM repairs WHERE id=:id") suspend fun deleteRepair(id: Long)
     @Insert suspend fun insertPhoto(photo: PhotoEntity): Long
+    @Update suspend fun updatePhoto(photo: PhotoEntity)
     @Query("DELETE FROM photos WHERE id IN (:ids)") suspend fun deletePhotos(ids: List<Long>)
     @Query("UPDATE vehicles SET photoPath = :path WHERE id = :vehicleId")
     suspend fun updateCoverPath(vehicleId: Long, path: String?)
 }
 
 @Database(
-    entities = [VehicleEntity::class, RepairEntity::class, PhotoEntity::class],
-    version = 2,
+    entities = [VehicleEntity::class, RepairEntity::class, PhotoEntity::class, PendingDeletion::class],
+    version = 3,
     exportSchema = false
 )
 abstract class JournalDatabase : RoomDatabase() {
@@ -182,5 +220,23 @@ val MIGRATION_1_2 = object : Migration(1, 2) {
         db.execSQL("DROP TABLE photos")
         db.execSQL("ALTER TABLE photos_new RENAME TO photos")
         db.execSQL("CREATE INDEX index_photos_vehicleId ON photos(vehicleId)")
+    }
+}
+
+/** Room v2 -> v3: adds stable cloud identifiers and persistent deletion queue. No old data is removed. */
+val MIGRATION_2_3 = object : Migration(2, 3) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        for (table in listOf("vehicles", "repairs", "photos")) {
+            db.execSQL("ALTER TABLE $table ADD COLUMN cloudId TEXT NOT NULL DEFAULT ''")
+            db.execSQL("ALTER TABLE $table ADD COLUMN syncDirty INTEGER NOT NULL DEFAULT 1")
+        }
+        db.execSQL("ALTER TABLE photos ADD COLUMN storagePath TEXT")
+        db.execSQL("""
+            CREATE TABLE IF NOT EXISTS pending_deletions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                entityType TEXT NOT NULL,
+                cloudId TEXT NOT NULL
+            )
+        """.trimIndent())
     }
 }

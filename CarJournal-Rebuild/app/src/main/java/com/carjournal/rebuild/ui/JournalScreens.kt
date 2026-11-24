@@ -28,6 +28,7 @@ import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
@@ -36,6 +37,7 @@ import coil.compose.AsyncImage
 import com.carjournal.rebuild.data.*
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.delay
 import java.io.File
 import java.text.NumberFormat
 import java.time.LocalDate
@@ -63,6 +65,17 @@ private sealed interface Page {
 
 @Composable
 fun JournalApp(vm: JournalViewModel) {
+    if (!vm.loggedIn) {
+        CloudLoginScreen(vm)
+        return
+    }
+    LaunchedEffect(vm.loggedIn) {
+        while (true) {
+            vm.syncNow()
+            delay(30_000)
+        }
+    }
+    val cloudScope = rememberCoroutineScope()
     var page: Page by remember { mutableStateOf(Page.ListPage) }
     val back: () -> Unit = {
         page = when (val p = page) {
@@ -77,7 +90,9 @@ fun JournalApp(vm: JournalViewModel) {
     when (val p = page) {
         is Page.ListPage -> VehicleListScreen(vm, onOpen = { page = Page.VehiclePage(it) },
             onCreate = { page = Page.EditVehiclePage(null) },
-            onStatistics = { page = Page.StatisticsPage })
+            onStatistics = { page = Page.StatisticsPage },
+            onSync = { cloudScope.launch { vm.syncNow() } },
+            onLogout = { vm.signOut(); page = Page.ListPage })
         is Page.StatisticsPage -> StatisticsScreen(vm, onBack = back)
         is Page.VehiclePage -> VehicleDetailScreen(vm, p.vehicleId,
             onBack = back,
@@ -89,6 +104,58 @@ fun JournalApp(vm: JournalViewModel) {
         })
         is Page.EditRepairPage -> RepairEditorScreen(vm, p.vehicleId, p.repairId,
             onBack = back, onSaved = { page = Page.VehiclePage(p.vehicleId) })
+    }
+}
+
+@Composable
+private fun CloudLoginScreen(vm: JournalViewModel) {
+    var email by remember { mutableStateOf("") }
+    var password by remember { mutableStateOf("") }
+    var busy by remember { mutableStateOf(false) }
+    var error by remember { mutableStateOf<String?>(null) }
+    val scope = rememberCoroutineScope()
+    Column(
+        Modifier.fillMaxSize().imePadding().verticalScroll(rememberScrollState()).padding(24.dp),
+        verticalArrangement = Arrangement.Center
+    ) {
+        Icon(Icons.Outlined.Cloud, contentDescription = null, modifier = Modifier.size(54.dp),
+            tint = MaterialTheme.colorScheme.primary)
+        Spacer(Modifier.height(20.dp))
+        Text("Журнал машин", style = MaterialTheme.typography.headlineMedium,
+            fontWeight = FontWeight.Bold)
+        Spacer(Modifier.height(8.dp))
+        Text("Общий аккаунт мастерской. Войдите с одинаковыми данными на каждом телефоне.",
+            style = MaterialTheme.typography.bodyMedium)
+        Spacer(Modifier.height(24.dp))
+        OutlinedTextField(email, { email = it }, label = { Text("Email мастерской") },
+            singleLine = true, modifier = Modifier.fillMaxWidth(),
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Email, imeAction = ImeAction.Next))
+        Spacer(Modifier.height(12.dp))
+        OutlinedTextField(password, { password = it }, label = { Text("Пароль") },
+            modifier = Modifier.fillMaxWidth(), singleLine = true,
+            visualTransformation = PasswordVisualTransformation(),
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password))
+        Spacer(Modifier.height(20.dp))
+        Button(onClick = {
+            busy = true
+            error = null
+            scope.launch {
+                try { vm.signIn(email, password) }
+                catch (e: Exception) { error = e.localizedMessage ?: "Не удалось войти" }
+                finally { busy = false }
+            }
+        }, enabled = !busy && email.contains('@') && password.isNotBlank(),
+            modifier = Modifier.fillMaxWidth().height(54.dp)) {
+            Text(if (busy) "Входим..." else "Войти и загрузить машины")
+        }
+        Spacer(Modifier.height(10.dp))
+        Text("Аккаунт создаётся один раз в Supabase → Authentication → Users.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant)
+        if (error != null) {
+            Spacer(Modifier.height(12.dp))
+            Text(error ?: "", color = MaterialTheme.colorScheme.error)
+        }
     }
 }
 
@@ -123,7 +190,9 @@ private fun VehicleListScreen(
     vm: JournalViewModel,
     onOpen: (Long) -> Unit,
     onCreate: () -> Unit,
-    onStatistics: () -> Unit
+    onStatistics: () -> Unit,
+    onSync: () -> Unit,
+    onLogout: () -> Unit
 ) {
     val vehicles by vm.vehicles.collectAsState()
     val totals by vm.totals.collectAsState()
@@ -138,6 +207,12 @@ private fun VehicleListScreen(
                     Icon(Icons.Outlined.BarChart, contentDescription = null, modifier = Modifier.size(20.dp))
                     Spacer(Modifier.width(5.dp))
                     Text("Статистика")
+                }
+                IconButton(onClick = onSync) {
+                    Icon(Icons.Outlined.Sync, contentDescription = "Синхронизировать с облаком")
+                }
+                IconButton(onClick = onLogout) {
+                    Icon(Icons.Outlined.Logout, contentDescription = "Выйти из аккаунта")
                 }
             }
         },
@@ -157,6 +232,11 @@ private fun VehicleListScreen(
                     leadingIcon = { Icon(Icons.Outlined.Search, null) },
                     singleLine = true, modifier = Modifier.fillMaxWidth()
                 )
+            }
+            item {
+                Text(vm.syncStatus, style = MaterialTheme.typography.bodySmall,
+                    color = if (vm.syncStatus.startsWith("Не синхронизировано"))
+                        MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant)
             }
             item {
                 SoftCard {
@@ -508,7 +588,8 @@ private fun VehicleEditorScreen(
                                 id = existing?.id ?: 0, plateNumber = plate.trim(),
                                 brand = existing?.brand ?: "", model = existing?.model ?: "",
                                 photoPath = existing?.photoPath,
-                                createdAtEpochMs = existing?.createdAtEpochMs ?: System.currentTimeMillis()
+                                createdAtEpochMs = existing?.createdAtEpochMs ?: System.currentTimeMillis(),
+                                cloudId = existing?.cloudId ?: "", syncDirty = true
                             )
                             val newPhotoUris = photos.filter { it.existingId == null }.map { it.uri }
                             if (isEditing) {
@@ -594,7 +675,8 @@ private fun RepairEditorScreen(
                             RepairEntity(id = repairId ?: 0, vehicleId = vehicleId,
                                 dateEpochDay = date, price = amount,
                                 description = description.trim(), currencyCode = currency,
-                                repairType = existing?.repairType ?: "Общий ремонт"),
+                                repairType = existing?.repairType ?: "Общий ремонт",
+                                cloudId = existing?.cloudId ?: "", syncDirty = true),
                             newVehiclePhotos.map { it.uri }
                         )
                         onSaved()

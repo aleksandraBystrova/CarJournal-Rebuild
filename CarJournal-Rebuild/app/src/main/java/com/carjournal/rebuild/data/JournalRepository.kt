@@ -17,7 +17,7 @@ data class RepairDraft(
 
 class JournalRepository(
     private val context: Context,
-    private val db: JournalDatabase
+    val db: JournalDatabase
 ) {
     val dao = db.dao()
     private val photoFolder = File(context.filesDir, "journal_photos")
@@ -98,6 +98,9 @@ class JournalRepository(
             db.withTransaction {
                 if (editedVehicle != null) dao.updateVehicle(editedVehicle.copy(photoPath = coverPath))
                 else dao.updateCoverPath(vehicleId, coverPath)
+                removed.filter { it.cloudId.isNotBlank() }.forEach {
+                    dao.insertDeletion(PendingDeletion(entityType = "photos", cloudId = it.cloudId))
+                }
                 if (removed.isNotEmpty()) dao.deletePhotos(removed.map { it.id })
                 imported.forEach { dao.insertPhoto(PhotoEntity(vehicleId = vehicleId, filePath = it)) }
             }
@@ -130,12 +133,22 @@ class JournalRepository(
 
     suspend fun deleteRepair(repairId: Long) = withContext(Dispatchers.IO) {
         // Удаление ремонта не трогает общую галерею автомобиля.
-        db.withTransaction { dao.deleteRepair(repairId) }
+        db.withTransaction {
+            dao.repairNow(repairId)?.cloudId?.takeIf { it.isNotBlank() }?.let {
+                dao.insertDeletion(PendingDeletion(entityType = "repairs", cloudId = it))
+            }
+            dao.deleteRepair(repairId)
+        }
     }
 
     suspend fun deleteVehicle(vehicleId: Long) = withContext(Dispatchers.IO) {
         val paths = dao.vehiclePhotoPathsNow(vehicleId) + listOfNotNull(dao.vehicleCoverPathNow(vehicleId))
-        db.withTransaction { dao.deleteVehicle(vehicleId) }
+        db.withTransaction {
+            dao.vehicleNow(vehicleId)?.cloudId?.takeIf { it.isNotBlank() }?.let {
+                dao.insertDeletion(PendingDeletion(entityType = "vehicles", cloudId = it))
+            }
+            dao.deleteVehicle(vehicleId)
+        }
         paths.distinct().forEach(::deleteOwnPhoto)
     }
 }

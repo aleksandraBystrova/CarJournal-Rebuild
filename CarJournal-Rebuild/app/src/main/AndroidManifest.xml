@@ -1,9 +1,10 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <uses-permission android:name="android.permission.INTERNET" />
     <application
         android:name=".JournalApplication"
         android:allowBackup="false"
-        android:label="Журнал машин (тест)"
+        android:label="Журнал машин (облако)"
         android:supportsRtl="true"
         android:theme="@style/Theme.CarJournal">
         <provider
