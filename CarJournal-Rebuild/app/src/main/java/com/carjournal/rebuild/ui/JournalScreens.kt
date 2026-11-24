@@ -35,6 +35,7 @@ import androidx.compose.ui.window.Dialog
 import androidx.core.net.toUri
 import coil.compose.AsyncImage
 import com.carjournal.rebuild.data.*
+import com.carjournal.rebuild.cloud.CloudHttpException
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.delay
@@ -60,6 +61,7 @@ private sealed interface Page {
     data object StatisticsPage : Page
     data class VehiclePage(val vehicleId: Long) : Page
     data class EditVehiclePage(val vehicleId: Long?) : Page
+    data class EditPhotosPage(val vehicleId: Long) : Page
     data class EditRepairPage(val vehicleId: Long, val repairId: Long?) : Page
 }
 
@@ -76,6 +78,7 @@ fun JournalApp(vm: JournalViewModel) {
         }
     }
     val cloudScope = rememberCoroutineScope()
+    val syncSnackbar = remember { SnackbarHostState() }
     var page: Page by remember { mutableStateOf(Page.ListPage) }
     val back: () -> Unit = {
         page = when (val p = page) {
@@ -83,6 +86,7 @@ fun JournalApp(vm: JournalViewModel) {
             is Page.StatisticsPage -> Page.ListPage
             is Page.VehiclePage -> Page.ListPage
             is Page.EditVehiclePage -> p.vehicleId?.let { Page.VehiclePage(it) } ?: Page.ListPage
+            is Page.EditPhotosPage -> Page.VehiclePage(p.vehicleId)
             is Page.EditRepairPage -> Page.VehiclePage(p.vehicleId)
         }
     }
@@ -91,17 +95,24 @@ fun JournalApp(vm: JournalViewModel) {
         is Page.ListPage -> VehicleListScreen(vm, onOpen = { page = Page.VehiclePage(it) },
             onCreate = { page = Page.EditVehiclePage(null) },
             onStatistics = { page = Page.StatisticsPage },
-            onSync = { cloudScope.launch { vm.syncNow() } },
-            onLogout = { vm.signOut(); page = Page.ListPage })
+            onSync = { cloudScope.launch {
+                vm.syncNow()
+                syncSnackbar.showSnackbar(vm.syncStatus)
+            } },
+            onLogout = { vm.signOut(); page = Page.ListPage },
+            syncSnackbar = syncSnackbar)
         is Page.StatisticsPage -> StatisticsScreen(vm, onBack = back)
         is Page.VehiclePage -> VehicleDetailScreen(vm, p.vehicleId,
             onBack = back,
             onEditVehicle = { page = Page.EditVehiclePage(p.vehicleId) },
+            onEditPhotos = { page = Page.EditPhotosPage(p.vehicleId) },
             onNewRepair = { page = Page.EditRepairPage(p.vehicleId, null) },
             onEditRepair = { page = Page.EditRepairPage(p.vehicleId, it) })
         is Page.EditVehiclePage -> VehicleEditorScreen(vm, p.vehicleId, onBack = back, onSaved = {
             page = if (p.vehicleId != null) Page.VehiclePage(p.vehicleId) else Page.VehiclePage(it)
         })
+        is Page.EditPhotosPage -> VehiclePhotoEditorScreen(vm, p.vehicleId, onBack = back,
+            onSaved = { page = Page.VehiclePage(p.vehicleId) })
         is Page.EditRepairPage -> RepairEditorScreen(vm, p.vehicleId, p.repairId,
             onBack = back, onSaved = { page = Page.VehiclePage(p.vehicleId) })
     }
@@ -113,6 +124,7 @@ private fun CloudLoginScreen(vm: JournalViewModel) {
     var password by remember { mutableStateOf("") }
     var busy by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
+    var loginDialog by remember { mutableStateOf<String?>(null) }
     val scope = rememberCoroutineScope()
     Column(
         Modifier.fillMaxSize().imePadding().verticalScroll(rememberScrollState()).padding(24.dp),
@@ -124,14 +136,14 @@ private fun CloudLoginScreen(vm: JournalViewModel) {
         Text("Журнал машин", style = MaterialTheme.typography.headlineMedium,
             fontWeight = FontWeight.Bold)
         Spacer(Modifier.height(8.dp))
-        Text("Общий аккаунт мастерской. Войдите с одинаковыми данными на каждом телефоне.",
+        Text("Общий аккаунт мастерской",
             style = MaterialTheme.typography.bodyMedium)
         Spacer(Modifier.height(24.dp))
-        OutlinedTextField(email, { email = it }, label = { Text("Email мастерской") },
+        OutlinedTextField(email, { email = it; error = null }, label = { Text("Email мастерской") },
             singleLine = true, modifier = Modifier.fillMaxWidth(),
             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Email, imeAction = ImeAction.Next))
         Spacer(Modifier.height(12.dp))
-        OutlinedTextField(password, { password = it }, label = { Text("Пароль") },
+        OutlinedTextField(password, { password = it; error = null }, label = { Text("Пароль") },
             modifier = Modifier.fillMaxWidth(), singleLine = true,
             visualTransformation = PasswordVisualTransformation(),
             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password))
@@ -141,22 +153,30 @@ private fun CloudLoginScreen(vm: JournalViewModel) {
             error = null
             scope.launch {
                 try { vm.signIn(email, password) }
-                catch (e: Exception) { error = e.localizedMessage ?: "Не удалось войти" }
+                catch (e: Exception) {
+                    when {
+                        e is CloudHttpException && e.status in listOf(400, 401) ->
+                            error = "Неверный email или пароль"
+                        e is CloudHttpException && e.status == 429 ->
+                            loginDialog = "Слишком много попыток входа. Попробуйте позже."
+                        e is CloudHttpException ->
+                            loginDialog = "Не удалось войти. Проверьте подключение и повторите попытку."
+                        else -> loginDialog = "Не удалось подключиться. Проверьте интернет и повторите попытку."
+                    }
+                }
                 finally { busy = false }
             }
         }, enabled = !busy && email.contains('@') && password.isNotBlank(),
             modifier = Modifier.fillMaxWidth().height(54.dp)) {
-            Text(if (busy) "Входим..." else "Войти и загрузить машины")
+            Text(if (busy) "Входим..." else "Войти")
         }
-        Spacer(Modifier.height(10.dp))
-        Text("Аккаунт создаётся один раз в Supabase → Authentication → Users.",
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant)
         if (error != null) {
             Spacer(Modifier.height(12.dp))
-            Text(error ?: "", color = MaterialTheme.colorScheme.error)
+            Text(error ?: "", color = MaterialTheme.colorScheme.error,
+                style = MaterialTheme.typography.bodyMedium)
         }
     }
+    if (loginDialog != null) ErrorDialog(loginDialog!!) { loginDialog = null }
 }
 
 @Composable
@@ -192,7 +212,8 @@ private fun VehicleListScreen(
     onCreate: () -> Unit,
     onStatistics: () -> Unit,
     onSync: () -> Unit,
-    onLogout: () -> Unit
+    onLogout: () -> Unit,
+    syncSnackbar: SnackbarHostState
 ) {
     val vehicles by vm.vehicles.collectAsState()
     val totals by vm.totals.collectAsState()
@@ -201,6 +222,7 @@ private fun VehicleListScreen(
         vehicles.filter { it.plateNumber.contains(query, ignoreCase = true) }
     }
     Scaffold(
+        snackbarHost = { SnackbarHost(syncSnackbar) },
         topBar = {
             Header("Машины") {
                 TextButton(onClick = onStatistics) {
@@ -216,7 +238,7 @@ private fun VehicleListScreen(
                 }
             }
         },
-        floatingActionButton = { LargeFloatingActionButton(onClick = onCreate) {
+        floatingActionButton = { FloatingActionButton(onClick = onCreate) {
             Icon(Icons.Outlined.Add, "Добавить машину")
         } }
     ) { padding ->
@@ -232,11 +254,6 @@ private fun VehicleListScreen(
                     leadingIcon = { Icon(Icons.Outlined.Search, null) },
                     singleLine = true, modifier = Modifier.fillMaxWidth()
                 )
-            }
-            item {
-                Text(vm.syncStatus, style = MaterialTheme.typography.bodySmall,
-                    color = if (vm.syncStatus.startsWith("Не синхронизировано"))
-                        MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant)
             }
             item {
                 SoftCard {
@@ -291,6 +308,10 @@ private fun VehicleListScreen(
                         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
                             Text(vehicle.plateNumber, fontWeight = FontWeight.Bold,
                                 style = MaterialTheme.typography.titleMedium)
+                            if (vehicle.model.isNotBlank()) {
+                                Text(vehicle.model, style = MaterialTheme.typography.bodyMedium,
+                                    maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            }
                             Text("Ремонтов: ${vehicle.repairCount}", style = MaterialTheme.typography.bodySmall)
                         }
                         Icon(Icons.Outlined.ChevronRight, null)
@@ -377,7 +398,8 @@ private fun CarPicture(path: String?, modifier: Modifier = Modifier) {
 @Composable
 private fun VehicleDetailScreen(
     vm: JournalViewModel, id: Long, onBack: () -> Unit,
-    onEditVehicle: () -> Unit, onNewRepair: () -> Unit, onEditRepair: (Long) -> Unit
+    onEditVehicle: () -> Unit, onEditPhotos: () -> Unit,
+    onNewRepair: () -> Unit, onEditRepair: (Long) -> Unit
 ) {
     val vehicle by remember(id) { vm.repo.dao.observeVehicle(id) }.collectAsState(initial = null)
     val repairs by remember(id) { vm.repo.dao.observeRepairs(id) }.collectAsState(initial = emptyList())
@@ -404,13 +426,19 @@ private fun VehicleDetailScreen(
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         CarPicture(current.photoPath, Modifier.size(92.dp))
                         Spacer(Modifier.width(14.dp))
-                        Text(current.plateNumber, style = MaterialTheme.typography.titleLarge)
+                        Column {
+                            Text(current.plateNumber, style = MaterialTheme.typography.titleLarge)
+                            if (current.model.isNotBlank()) {
+                                Text(current.model, style = MaterialTheme.typography.bodyMedium,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            }
+                        }
                     }
                 }
             }
             // Общая галерея автомобиля, включая снимки, добавленные при ремонтах.
             if (current != null) {
-                item { VehiclePhotoGallery(vehiclePhotos, onEditVehicle) }
+                item { VehiclePhotoGallery(vehiclePhotos, onEditPhotos) }
             }
             item {
                 OutlinedTextField(search, { search = it }, modifier = Modifier.fillMaxWidth(),
@@ -459,7 +487,7 @@ private fun VehicleDetailScreen(
 
 /** Все снимки машины находятся в одном месте, независимо от того, при каком ремонте добавлены. */
 @Composable
-private fun VehiclePhotoGallery(photos: List<PhotoEntity>, onEditVehicle: () -> Unit) {
+private fun VehiclePhotoGallery(photos: List<PhotoEntity>, onEditPhotos: () -> Unit) {
     var selectedPath by remember { mutableStateOf<String?>(null) }
     Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -467,7 +495,7 @@ private fun VehiclePhotoGallery(photos: List<PhotoEntity>, onEditVehicle: () -> 
                 style = MaterialTheme.typography.titleMedium,
                 fontWeight = FontWeight.SemiBold,
                 modifier = Modifier.weight(1f))
-            TextButton(onClick = onEditVehicle) {
+            TextButton(onClick = onEditPhotos) {
                 Text(if (photos.isEmpty()) "Добавить фото" else "Изменить фото")
             }
         }
@@ -527,11 +555,13 @@ private fun VehicleEditorScreen(
     }
     val dbPhotos by photoFlow.collectAsState(initial = null as List<PhotoEntity>?)
     var plate by remember(vehicleId) { mutableStateOf("") }
+    var model by remember(vehicleId) { mutableStateOf("") }
     val photos = remember(vehicleId) { mutableStateListOf<PhotoChoice>() }
     var loaded by remember(vehicleId) { mutableStateOf(false) }
     LaunchedEffect(existing?.id, dbPhotos) {
         if (existing != null && dbPhotos != null && !loaded) {
             plate = existing!!.plateNumber
+            model = existing!!.model
             photos.clear()
             photos.addAll(dbPhotos!!.map { PhotoChoice(it.id, File(it.filePath).toUri()) })
             loaded = true
@@ -556,12 +586,18 @@ private fun VehicleEditorScreen(
                 modifier = Modifier.fillMaxWidth(), singleLine = true,
                 keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
                 keyboardActions = KeyboardActions(onDone = { focus.clearFocus() }))
-            Text("Фотографии машины", fontWeight = FontWeight.SemiBold)
-            PhotoPicker(
-                photos = photos.toList(), maxItems = 10,
-                onAdd = { photos.appendPhotos(it, 10) },
-                onRemove = { photos.remove(it) }
-            )
+            OutlinedTextField(model, { model = it }, label = { Text("Модель машины") },
+                modifier = Modifier.fillMaxWidth(), singleLine = true,
+                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
+                keyboardActions = KeyboardActions(onDone = { focus.clearFocus() }))
+            if (!isEditing) {
+                Text("Фотографии машины", fontWeight = FontWeight.SemiBold)
+                PhotoPicker(
+                    photos = photos.toList(), maxItems = 10,
+                    onAdd = { photos.appendPhotos(it, 10) },
+                    onRemove = { photos.remove(it) }
+                )
+            }
             if (!isEditing) {
                 HorizontalDivider()
                 Text("Первый ремонт", fontWeight = FontWeight.SemiBold)
@@ -586,16 +622,16 @@ private fun VehicleEditorScreen(
                         try {
                             val vehicle = VehicleEntity(
                                 id = existing?.id ?: 0, plateNumber = plate.trim(),
-                                brand = existing?.brand ?: "", model = existing?.model ?: "",
+                                brand = existing?.brand ?: "", model = model.trim(),
                                 photoPath = existing?.photoPath,
                                 createdAtEpochMs = existing?.createdAtEpochMs ?: System.currentTimeMillis(),
                                 cloudId = existing?.cloudId ?: "", syncDirty = true
                             )
-                            val newPhotoUris = photos.filter { it.existingId == null }.map { it.uri }
                             if (isEditing) {
-                                vm.editVehicle(vehicle, photos.mapNotNull { it.existingId }.toSet(), newPhotoUris)
+                                vm.editVehicleDetails(vehicle)
                                 onSaved(vehicleId!!)
                             } else {
+                                val newPhotoUris = photos.filter { it.existingId == null }.map { it.uri }
                                 val repair = if (hasRepair) RepairDraft(date, amount!!, description.trim(), currency) else null
                                 val newId = vm.addVehicle(vehicle, repair, newPhotoUris)
                                 onSaved(newId)
@@ -608,6 +644,68 @@ private fun VehicleEditorScreen(
                 shape = RoundedCornerShape(30.dp)
             ) { Text(if (busy) "Сохраняем..." else if (isEditing) "Сохранить изменения" else "Сохранить машину") }
             Spacer(Modifier.height(20.dp))
+        }
+    }
+    if (error != null) ErrorDialog(error!!) { error = null }
+}
+
+/** Photos are edited separately from plate/model, so changing the gallery cannot edit vehicle details. */
+@Composable
+private fun VehiclePhotoEditorScreen(
+    vm: JournalViewModel, vehicleId: Long, onBack: () -> Unit, onSaved: () -> Unit
+) {
+    val vehicle by remember(vehicleId) { vm.repo.dao.observeVehicle(vehicleId) }
+        .collectAsState(initial = null)
+    val storedPhotos by remember(vehicleId) { vm.repo.dao.observePhotos(vehicleId) }
+        .collectAsState(initial = null as List<PhotoEntity>?)
+    val photos = remember(vehicleId) { mutableStateListOf<PhotoChoice>() }
+    var loaded by remember(vehicleId) { mutableStateOf(false) }
+    LaunchedEffect(vehicle?.id, storedPhotos) {
+        if (vehicle != null && storedPhotos != null && !loaded) {
+            photos.clear()
+            photos.addAll(storedPhotos!!.map { PhotoChoice(it.id, File(it.filePath).toUri()) })
+            loaded = true
+        }
+    }
+    var busy by remember { mutableStateOf(false) }
+    var error by remember { mutableStateOf<String?>(null) }
+    val scope = rememberCoroutineScope()
+    Scaffold(topBar = { Header("Фотографии машины", onBack) }) { padding ->
+        Column(
+            Modifier.fillMaxSize().padding(padding).verticalScroll(rememberScrollState())
+                .padding(16.dp), verticalArrangement = Arrangement.spacedBy(16.dp)
+        ) {
+            if (!loaded) {
+                CircularProgressIndicator()
+            } else {
+                Text("Фотографии (${photos.size}/10)",
+                    style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+                PhotoPicker(
+                    photos = photos.toList(), maxItems = 10,
+                    onAdd = { photos.appendPhotos(it, 10) },
+                    onRemove = { photos.remove(it) }
+                )
+                Button(
+                    onClick = {
+                        val current = vehicle ?: return@Button
+                        busy = true
+                        scope.launch {
+                            try {
+                                vm.editVehicle(
+                                    current,
+                                    photos.mapNotNull { it.existingId }.toSet(),
+                                    photos.filter { it.existingId == null }.map { it.uri }
+                                )
+                                onSaved()
+                            } catch (e: Exception) {
+                                error = e.localizedMessage ?: "Не удалось сохранить фотографии"
+                            } finally { busy = false }
+                        }
+                    },
+                    enabled = !busy, modifier = Modifier.fillMaxWidth().height(54.dp),
+                    shape = RoundedCornerShape(30.dp)
+                ) { Text(if (busy) "Сохраняем..." else "Сохранить фотографии") }
+            }
         }
     }
     if (error != null) ErrorDialog(error!!) { error = null }
@@ -657,8 +755,6 @@ private fun RepairEditorScreen(
             RepairFields(date, { date = it }, currency, { currency = it },
                 price, { price = it }, description, { description = it })
             Text("Добавить фотографии машины", fontWeight = FontWeight.SemiBold)
-            Text("Снимки сохраняются в общей галерее автомобиля, а не в ремонте.",
-                style = MaterialTheme.typography.bodySmall)
             PhotoPicker(newVehiclePhotos.toList(), (10 - vehiclePhotos.size).coerceAtLeast(0),
                 { newVehiclePhotos.appendPhotos(it, (10 - vehiclePhotos.size).coerceAtLeast(0)) },
                 { removed -> newVehiclePhotos.remove(removed) })

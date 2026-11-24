@@ -13,6 +13,7 @@ import org.json.JSONObject
 import java.io.ByteArrayOutputStream
 import java.io.File
 import java.time.Instant
+import java.time.OffsetDateTime
 import java.time.LocalDate
 import java.util.UUID
 
@@ -61,9 +62,11 @@ class CloudSynchronizer(
                 client.upsert("vehicles", JSONObject()
                     .put("id", cloudId)
                     .put("plate_number", local.plateNumber)
+                    .put("model", local.model)
+                    .put("brand", local.brand)
                     .put("created_at", Instant.ofEpochMilli(local.createdAtEpochMs).toString())
                     .put("updated_at", Instant.now().toString()))
-                dao.markVehicleClean(local.id, cloudId, local.plateNumber)
+                dao.markVehicleClean(local.id, cloudId, local.plateNumber, local.model, local.brand)
             }
 
             dao.allRepairs().filter { it.syncDirty }.forEach { local ->
@@ -111,12 +114,15 @@ class CloudSynchronizer(
                     continue
                 }
                 val plate = remote.getString("plate_number")
-                val created = Instant.parse(remote.getString("created_at")).toEpochMilli()
+                val created = parseSupabaseTimestamp(remote.getString("created_at"))
+                val model = remote.optString("model", "")
+                val brand = remote.optString("brand", "")
                 if (existing == null) {
-                    dao.insertVehicle(VehicleEntity(plateNumber = plate, model = "", createdAtEpochMs = created,
-                        cloudId = cloudId, syncDirty = false))
+                    dao.insertVehicle(VehicleEntity(plateNumber = plate, brand = brand, model = model,
+                        createdAtEpochMs = created, cloudId = cloudId, syncDirty = false))
                 } else if (!existing.syncDirty) {
-                    dao.updateVehicle(existing.copy(plateNumber = plate, createdAtEpochMs = created, syncDirty = false))
+                    dao.updateVehicle(existing.copy(plateNumber = plate, brand = brand, model = model,
+                        createdAtEpochMs = created, syncDirty = false))
                 }
             }
 
@@ -150,7 +156,7 @@ class CloudSynchronizer(
                     ?: downloadToLocal(path, cloudId)
                 val photo = PhotoEntity(id = existing?.id ?: 0, vehicleId = vehicle.id,
                     filePath = localFile.absolutePath, createdAtEpochMs = existing?.createdAtEpochMs
-                        ?: Instant.parse(remote.getString("created_at")).toEpochMilli(),
+                        ?: parseSupabaseTimestamp(remote.getString("created_at")),
                     cloudId = cloudId, syncDirty = false, storagePath = path)
                 if (existing == null) dao.insertPhoto(photo) else dao.updatePhoto(photo)
             }
@@ -162,6 +168,10 @@ class CloudSynchronizer(
             }
         }
     }
+
+    /** Supabase/PostgreSQL timestamps include UTC offsets and variable fractions. */
+    private fun parseSupabaseTimestamp(value: String): Long =
+        OffsetDateTime.parse(value).toInstant().toEpochMilli()
 
     private suspend fun removeLocalVehicle(id: Long) {
         val files = dao.vehiclePhotoPathsNow(id) + listOfNotNull(dao.vehicleCoverPathNow(id))

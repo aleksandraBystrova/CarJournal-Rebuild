@@ -51,7 +51,7 @@ class JournalViewModel(application: Application) : AndroidViewModel(application)
             syncStatus = "Облако: все данные синхронизированы"
         } catch (e: Exception) {
             // Never mark local data as lost or clear it on network failures.
-            syncStatus = "Не синхронизировано: ${e.localizedMessage?.take(160) ?: "проверьте интернет"}"
+            syncStatus = "Не удалось синхронизировать. Данные сохранены на телефоне. Проверьте интернет."
         }
     }
 
@@ -68,6 +68,11 @@ class JournalViewModel(application: Application) : AndroidViewModel(application)
 
     suspend fun editVehicle(vehicle: VehicleEntity, keepPhotoIds: Set<Long>, newPhotos: List<Uri>) {
         repo.updateVehicle(vehicle, keepPhotoIds, newPhotos)
+        triggerSync()
+    }
+
+    suspend fun editVehicleDetails(vehicle: VehicleEntity) {
+        repo.updateVehicleDetails(vehicle)
         triggerSync()
     }
 

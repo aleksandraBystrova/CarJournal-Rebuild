@@ -1,4 +1,13 @@
-# CarJournal 0.4 Cloud Preview
+# CarJournal 0.5 Cloud Preview
+
+## What's changed in 0.5
+
+- Fixed parsing of Supabase PostgreSQL timestamps containing `+00:00` offsets and variable fractional seconds.
+- Added vehicle model input + model display in lists/details and cloud synchronization (`public.vehicles.model`, `public.vehicles.brand`).
+- Split editing of car metadata (plate/model) from editing photos, without changing the photos from the metadata editor.
+- Simplified login wording; invalid email/password shown below the login button; other login failures shown in a dialog.
+- Main screen no longer prints raw Supabase exceptions; manual sync shows a friendly status when the sync button is pressed.
+- Smaller main Add button and removed verbose photo explanation from repair editing.
 
 ## What this build does
 
@@ -19,7 +28,7 @@ It is an initial online sync prototype, not a verified production-grade backup s
 1. Supabase Dashboard -> carjournal -> Authentication -> Users -> Add user.
 2. Create a dedicated workshop email + password, enable/mark email confirmed as appropriate. Do NOT put a password in GitHub or send it in ChatGPT.
 3. Install the preview APK on two Android phones. Log in with the same email and password.
-4. On phone A add a TEST car (e.g., TEST-001), a repair and a photo. Wait for status **"Облако: все данные синхронизированы"**.
+4. On phone A add a TEST car (e.g., TEST-001) with a model, a repair and a photo. Tap the sync icon. A snackbar should report **"Облако: все данные синхронизированы"**. The raw error is no longer shown inline on the home screen.
 5. Confirm the three rows in Supabase Table Editor (`vehicles`, `repairs`, `photos`) and a matching image in Storage -> car-photos.
 6. On phone B open the app and log in with exactly the same account. Verify the car, repair, and photo are fetched.
 7. Try an edit on phone B and sync on phone A. Test deletion using test records only.
@@ -46,4 +55,17 @@ Only a Supabase **publishable** key is shipped in the APK, never a secret/servic
 
 ## Caveats and next step
 
+**Debug update/signature warning:** `com.carjournal.rebuild.cloudpreview` matches the previous 0.4 Cloud Preview, but each GitHub Actions runner may generate a different debug signing key. Android can refuse an in-place update (`App not installed`). Never uninstall a populated copy until every car, repair, and photo has been checked in Supabase and on a second device. An independent local backup or stable secure release signing is needed for reliable seamless upgrades. No user data was deleted by the v0.5 server schema migration.
+
 For production: test sync conflicts on two devices, upgrade session storage to Android Keystore, handle multiple workshop users if separate identities are desired, implement periodic independent backups, test deletion and restoration, and design an explicit import procedure for local records from the previously installed app. Debug builds from ephemeral GitHub runners may use different signing keys; this preview intentionally uses a different application ID.
+
+## Server migration applied
+
+`public.vehicles` gained optional, non-destructive text fields with empty-string defaults:
+
+```sql
+alter table public.vehicles add column if not exists model text not null default '';
+alter table public.vehicles add column if not exists brand text not null default '';
+```
+
+No Room schema migration was necessary: model and brand already existed in Room.

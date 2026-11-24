@@ -72,6 +72,12 @@ class JournalRepository(
         }
     }
 
+    /** Edit only plate/model metadata; the gallery remains untouched. */
+    suspend fun updateVehicleDetails(vehicle: VehicleEntity) = withContext(Dispatchers.IO) {
+        require(vehicle.id != 0L) { "Машина не найдена" }
+        db.withTransaction { dao.updateVehicle(vehicle.copy(syncDirty = true)) }
+    }
+
     /** Все фотографии принадлежат машине, даже если их добавили на экране ремонта. */
     suspend fun updateVehicle(
         vehicle: VehicleEntity,
