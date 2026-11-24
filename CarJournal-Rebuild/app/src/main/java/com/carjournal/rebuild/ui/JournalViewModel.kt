@@ -50,8 +50,17 @@ class JournalViewModel(application: Application) : AndroidViewModel(application)
             synchronizer.sync()
             syncStatus = "Облако: все данные синхронизированы"
         } catch (e: Exception) {
-            // Never mark local data as lost or clear it on network failures.
-            syncStatus = "Не удалось синхронизировать. Данные сохранены на телефоне. Проверьте интернет."
+            // Show a network hint only for actual connection errors; HTTP 4xx is not an internet outage.
+            syncStatus = when (e) {
+                is com.carjournal.rebuild.cloud.CloudHttpException -> when (e.status) {
+                    400 -> "Облако отклонило данные (400). Записи остались на телефоне."
+                    401 -> "Сессия истекла. Выйдите и войдите в аккаунт снова."
+                    403 -> "Нет доступа к облачным данным (403)."
+                    else -> "Ошибка облака (${e.status}). Данные остались на телефоне."
+                }
+                is java.io.IOException -> "Не удалось связаться с облаком. Данные сохранены на телефоне."
+                else -> "Ошибка синхронизации. Данные сохранены на телефоне."
+            }
         }
     }
 

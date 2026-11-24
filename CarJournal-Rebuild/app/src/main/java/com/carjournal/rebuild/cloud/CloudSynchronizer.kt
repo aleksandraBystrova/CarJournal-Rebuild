@@ -63,7 +63,6 @@ class CloudSynchronizer(
                     .put("id", cloudId)
                     .put("plate_number", local.plateNumber)
                     .put("model", local.model)
-                    .put("brand", local.brand)
                     .put("created_at", Instant.ofEpochMilli(local.createdAtEpochMs).toString())
                     .put("updated_at", Instant.now().toString()))
                 dao.markVehicleClean(local.id, cloudId, local.plateNumber, local.model, local.brand)
@@ -116,12 +115,11 @@ class CloudSynchronizer(
                 val plate = remote.getString("plate_number")
                 val created = parseSupabaseTimestamp(remote.getString("created_at"))
                 val model = remote.optString("model", "")
-                val brand = remote.optString("brand", "")
                 if (existing == null) {
-                    dao.insertVehicle(VehicleEntity(plateNumber = plate, brand = brand, model = model,
+                    dao.insertVehicle(VehicleEntity(plateNumber = plate, model = model,
                         createdAtEpochMs = created, cloudId = cloudId, syncDirty = false))
                 } else if (!existing.syncDirty) {
-                    dao.updateVehicle(existing.copy(plateNumber = plate, brand = brand, model = model,
+                    dao.updateVehicle(existing.copy(plateNumber = plate, model = model,
                         createdAtEpochMs = created, syncDirty = false))
                 }
             }
