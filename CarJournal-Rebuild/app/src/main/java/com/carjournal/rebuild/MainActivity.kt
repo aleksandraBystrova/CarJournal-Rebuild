@@ -2,8 +2,13 @@ package com.carjournal.rebuild
 
 import android.os.Bundle
 import androidx.activity.ComponentActivity
+import androidx.activity.enableEdgeToEdge
 import androidx.activity.compose.setContent
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.safeDrawingPadding
+import androidx.compose.ui.Modifier
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.graphics.Color
 import androidx.compose.material3.lightColorScheme
@@ -14,10 +19,16 @@ import com.carjournal.rebuild.ui.JournalViewModel
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        // Use one edge-to-edge policy on all Android versions, including Xiaomi / Android 15+.
+        enableEdgeToEdge()
         setContent {
             MaterialTheme(colorScheme = journalColors()) {
                 val vm: JournalViewModel = viewModel()
-                JournalApp(vm)
+                // Insets are applied once for every screen, including login and dialogs.
+                // safeDrawingPadding stays clear of the status bar, camera cutout and nav bar.
+                Box(Modifier.fillMaxSize().safeDrawingPadding()) {
+                    JournalApp(vm)
+                }
             }
         }
     }
